@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { useSocketContext } from "./SocketContext";
 
 export default function Messages() {
-  const { socket, unreadMessages, markAsRead, onlineUserIds } = useSocketContext();
+  const { socket, unreadMessages, markAsRead, onlineUserIds, deleteMessage } = useSocketContext();
   const [isConnected, setIsConnected] = useState(socket.connected);
   const [messageInput, setMessageInput] = useState("");
   const [messages, setMessages] = useState([]);
@@ -11,6 +11,7 @@ export default function Messages() {
   const [currentRoom, setCurrentRoom] = useState("");
   const [selectedContactName, setSelectedContactName] = useState("");
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ messageId: string; x: number; y: number } | null>(null);
 
   // Отримуємо поточного користувача лише один раз для всього компонента
   const storedUser = JSON.parse(localStorage.getItem("currentUser"));
@@ -20,6 +21,7 @@ export default function Messages() {
   const myId = storedUser ? storedUser.id : null;
 
   const messagesEndRef = useRef(null);
+  const contextMenuRef = useRef(null);
 
   // Якщо користувач не авторизований
   if (!username) {
@@ -48,6 +50,11 @@ export default function Messages() {
       }
     });
 
+    socket.on("message_deleted", ({ messageId }) => {
+      // Remove deleted message from local state
+      setMessages((prev) => prev.filter((msg) => msg._id !== messageId));
+    });
+
     let typingTimer;
     socket.on("typing", (data) => {
       // Показуємо індикатор тільки якщо ми в тій самій кімнаті і це не ми друкуємо
@@ -65,9 +72,22 @@ export default function Messages() {
       socket.off("connect");
       socket.off("disconnect");
       socket.off("receive_message");
+      socket.off("message_deleted");
       socket.off("typing");
     };
   }, [username, currentRoom, socket]);
+
+  // Close context menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Переключення кімнати
   useEffect(() => {
@@ -163,6 +183,21 @@ export default function Messages() {
     }
   };
 
+  const handleContextMenu = (e: React.MouseEvent, messageId: string, isMe: boolean) => {
+    e.preventDefault();
+    // Only show context menu for own messages
+    if (!isMe) return;
+    
+    // Get the message bubble position
+    const messageBubble = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    
+    setContextMenu({
+      messageId,
+      x: messageBubble.right - 150,
+      y: messageBubble.bottom + 5,
+    });
+  };
+
   const formatTime = (dateString) => {
     if (!dateString) return "";
     const date = new Date(dateString);
@@ -253,6 +288,7 @@ export default function Messages() {
                   className={`flex flex-col max-w-[70%] ${isMe ? "self-end" : "self-start"}`}
                 >
                   <div
+                    onContextMenu={(e) => handleContextMenu(e, msg._id, isMe)}
                     className={`px-4 py-2 rounded-2xl shadow-sm ${isMe ? "bg-[#A8A5D8] text-white rounded-br-none" : "bg-white border border-gray-200 text-gray-800 rounded-bl-none"}`}
                   >
                     <div className="font-semibold text-[11px] mb-1 opacity-60">
@@ -260,8 +296,10 @@ export default function Messages() {
                     </div>
                     <div className="text-base break-words">{msg.content}</div>
                   </div>
-                  <div className="text-[10px] text-gray-400 mt-1 px-1">
-                    {formatTime(msg.createdAt)}
+                  <div className="flex items-center gap-2 mt-1 px-1">
+                    <div className="text-[10px] text-gray-400">
+                      {formatTime(msg.createdAt)}
+                    </div>
                   </div>
                 </div>
               );
@@ -270,6 +308,28 @@ export default function Messages() {
           {/* ЯКІР АВТОСКРОЛУ: ТЕПЕР ВІН ОДИН І ЗОВНІ ЦИКЛУ */}
           <div ref={messagesEndRef} />
         </div>
+
+        {/* CONTEXT MENU - Telegram Style */}
+        {contextMenu && (
+          <div
+            ref={contextMenuRef}
+            className="fixed bg-white border border-gray-300 rounded-lg shadow-lg z-50 min-w-[150px]"
+            style={{
+              top: `${contextMenu.y}px`,
+              left: `${contextMenu.x}px`,
+            }}
+          >
+            <button
+              onClick={() => {
+                deleteMessage(contextMenu.messageId, currentRoom);
+                setContextMenu(null);
+              }}
+              className="w-full text-left px-4 py-2 text-red-500 hover:bg-red-50 hover:text-red-700 transition-colors first:rounded-t-lg last:rounded-b-lg"
+            >
+              Delete
+            </button>
+          </div>
+        )}
 
         {/* ПРАВИЛЬНИЙ ІНДИКАТОР ДРУКУ */}
         <div className="h-5 text-sm text-gray-400 italic px-2 mt-1 mb-1">

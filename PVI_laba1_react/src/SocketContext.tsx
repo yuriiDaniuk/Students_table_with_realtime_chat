@@ -15,6 +15,7 @@ interface SocketContextType {
   unreadMessages: UnreadMessage[];
   markAsRead: (chat_id: string) => void;
   onlineUserIds: string[];
+  deleteMessage: (messageId: string, chatId: string) => void;
 }
 
 // Create the Context
@@ -178,11 +179,20 @@ export function SocketProvider({ children }: SocketProviderProps) {
     });
   };
 
+  // Function to delete a message
+  const deleteMessage = (messageId: string, chatId: string) => {
+    socket.emit('delete_message', {
+      messageId,
+      chatId,
+    });
+  };
+
   const value: SocketContextType = {
     socket,
     unreadMessages,
     markAsRead,
     onlineUserIds,
+    deleteMessage,
   };
 
   return (

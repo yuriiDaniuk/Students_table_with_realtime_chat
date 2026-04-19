@@ -31,6 +31,7 @@ const chatSchema = new mongoose.Schema({
 const messageSchema = new mongoose.Schema({
   chat_id: String,
   sender: String,
+  senderId: String,
   content: String,
   isRead: { type: Boolean, default: false },
   createdAt: {
@@ -85,7 +86,7 @@ io.on("connection", (socket) => {
 
   socket.on("chat_message", async ({ chat_id, sender, content }) => {
     try {
-      const message = new Message({ chat_id, sender, content, isRead: false });
+      const message = new Message({ chat_id, sender, senderId: socket.userId, content, isRead: false });
       const savedMessage = await message.save();
       io.to(chat_id).emit("receive_message", savedMessage);
 
@@ -116,6 +117,36 @@ io.on("connection", (socket) => {
       socket.to(chat_id).emit("messages_marked_read");
     } catch (error) {
       console.error("Error marking messages as read:", error);
+    }
+  });
+
+  socket.on("delete_message", async ({ messageId, chatId }) => {
+    try {
+      // Find the message by ID
+      const message = await Message.findById(messageId);
+
+      if (!message) {
+        console.error("Message not found:", messageId);
+        socket.emit("delete_message_error", { error: "Message not found" });
+        return;
+      }
+
+      // Check if the sender ID matches the current user's ID
+      if (String(message.senderId) !== String(socket.userId)) {
+        console.error("Unauthorized deletion attempt by user:", socket.userId);
+        socket.emit("delete_message_error", { error: "You can only delete your own messages" });
+        return;
+      }
+
+      // Delete the message
+      await Message.findByIdAndDelete(messageId);
+      console.log(`✅ Message ${messageId} deleted by user ${socket.userId}`);
+
+      // Broadcast the deletion to all users in the chat room
+      io.to(chatId).emit("message_deleted", { messageId, chatId });
+    } catch (error) {
+      console.error("Error deleting message:", error);
+      socket.emit("delete_message_error", { error: "Failed to delete message" });
     }
   });
 
