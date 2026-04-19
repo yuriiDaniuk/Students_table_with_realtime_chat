@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { useSocketContext } from "./SocketContext";
 
 export default function Messages() {
-  const { socket, unreadMessages, markAsRead } = useSocketContext();
+  const { socket, unreadMessages, markAsRead, onlineUserIds } = useSocketContext();
   const [isConnected, setIsConnected] = useState(socket.connected);
   const [messageInput, setMessageInput] = useState("");
   const [messages, setMessages] = useState([]);
@@ -10,6 +10,7 @@ export default function Messages() {
   const [contacts, setContacts] = useState([]);
   const [currentRoom, setCurrentRoom] = useState("");
   const [selectedContactName, setSelectedContactName] = useState("");
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
 
   // Отримуємо поточного користувача лише один раз для всього компонента
   const storedUser = JSON.parse(localStorage.getItem("currentUser"));
@@ -198,6 +199,7 @@ export default function Messages() {
                     setSelectedContactName(
                       `${contact.firstname} ${contact.lastname}`,
                     );
+                    setSelectedContactId(String(contact.id));
                     markAsRead(newRoomId);
                   }}
                   className={`p-3 rounded-lg cursor-pointer mb-2 flex items-center justify-between transition-colors ${
@@ -227,8 +229,8 @@ export default function Messages() {
           </h2>
           <div className="flex items-center gap-2">
             <span
-              className={`w-3 h-3 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`}
-              title={isConnected ? "Підключено" : "Відключено"}
+              className={`w-3 h-3 rounded-full ${selectedContactId && onlineUserIds.includes(selectedContactId) ? "bg-green-500" : "bg-gray-400"}`}
+              title={selectedContactId && onlineUserIds.includes(selectedContactId) ? "Користувач онлайн" : "Користувач офлайн"}
             ></span>
           </div>
         </div>
