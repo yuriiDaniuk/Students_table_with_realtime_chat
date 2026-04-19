@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Student, NewStudentData } from "./types";
+import { useSocketContext } from "./SocketContext";
 
 // --- Component State ---
 function Students() {
@@ -18,6 +19,8 @@ function Students() {
   const [deletingIds, setDeletingIds] = useState<number[]>([]);
 
   const [students, setStudents] = useState<Student[]>([]);
+
+  const { onlineUserIds } = useSocketContext();
 
   const [formData, setFormData] = useState<NewStudentData>({
     group: "",
@@ -428,7 +431,7 @@ function Students() {
               </td>
               <td className="border border-black p-3 text-center">
                 <span
-                  className={`inline-block w-4 h-4 rounded-full ${student.status === "active" ? "bg-[#6faa48]" : "bg-[#ccc]"}`}
+                  className={`inline-block w-4 h-4 rounded-full ${onlineUserIds.includes(String(student.id)) ? "bg-[#6faa48]" : "bg-[#ccc]"}`}
                 ></span>
               </td>
               <td className="border border-black p-3 text-center">

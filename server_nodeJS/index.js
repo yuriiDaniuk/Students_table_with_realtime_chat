@@ -58,6 +58,12 @@ io.on("connection", (socket) => {
     onlineUsers[userId] = socket.id;
     socket.userId = userId;
     socket.join(`user_${userId}`); // Join personal notification room
+    
+    // Send the current list of all online user IDs to the connecting user
+    const onlineUserIds = Object.keys(onlineUsers);
+    socket.emit("initial_online_users", onlineUserIds);
+    
+    // Broadcast that this user is now online to everyone
     io.emit("user_status", { userId, status: "online" });
   });
 
@@ -116,9 +122,11 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("Disconnected:", socket.id);
     if (socket.userId) {
+      console.log(`User ${socket.userId} is now offline`);
       delete onlineUsers[socket.userId];
+      // Broadcast offline status to all connected clients
       io.emit("user_status", { userId: socket.userId, status: "offline" });
-    } 
+    }
   }); 
 }); 
 

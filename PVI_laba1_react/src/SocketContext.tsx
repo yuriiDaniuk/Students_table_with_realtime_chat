@@ -14,6 +14,7 @@ interface SocketContextType {
   socket: Socket;
   unreadMessages: UnreadMessage[];
   markAsRead: (chat_id: string) => void;
+  onlineUserIds: string[];
 }
 
 // Create the Context
@@ -25,6 +26,7 @@ interface SocketProviderProps {
 
 export function SocketProvider({ children }: SocketProviderProps) {
   const [unreadMessages, setUnreadMessages] = useState<UnreadMessage[]>([]);
+  const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
 
   // Get current user from localStorage
   const storedUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
@@ -116,6 +118,50 @@ export function SocketProvider({ children }: SocketProviderProps) {
     };
   }, [socket, currentUserId]);
 
+  // Listen for initial online users list when user connects
+  useEffect(() => {
+    if (!socket) return;
+
+    function handleInitialOnlineUsers(onlineUserIds: string[]) {
+      console.log("📗 Отримано список онлайн юзерів:", onlineUserIds);
+      setOnlineUserIds(onlineUserIds);
+    }
+
+    socket.on('initial_online_users', handleInitialOnlineUsers);
+
+    return () => {
+      socket.off('initial_online_users', handleInitialOnlineUsers);
+    };
+  }, [socket]);
+
+  // Listen for real-time user status changes (online/offline)
+  useEffect(() => {
+    if (!socket) return;
+
+    function handleUserStatus(data: { userId: string; status: 'online' | 'offline' }) {
+      console.log(`👤 User ${data.userId} is now ${data.status}`);
+      
+      setOnlineUserIds((prev) => {
+        if (data.status === 'online') {
+          // Add user if not already in list
+          if (!prev.includes(data.userId)) {
+            return [...prev, data.userId];
+          }
+          return prev;
+        } else {
+          // Remove user from list
+          return prev.filter((id) => id !== data.userId);
+        }
+      });
+    }
+
+    socket.on('user_status', handleUserStatus);
+
+    return () => {
+      socket.off('user_status', handleUserStatus);
+    };
+  }, [socket]);
+
 
 
   // Function to mark messages as read
@@ -136,6 +182,7 @@ export function SocketProvider({ children }: SocketProviderProps) {
     socket,
     unreadMessages,
     markAsRead,
+    onlineUserIds,
   };
 
   return (
