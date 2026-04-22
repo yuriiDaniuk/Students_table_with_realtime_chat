@@ -13,7 +13,7 @@ interface UnreadMessage {
 interface SocketContextType {
   socket: Socket;
   unreadMessages: UnreadMessage[];
-  markAsRead: (chat_id: string) => void;
+  markAsRead: (chat_id: string, reader_id: string) => void;
   onlineUserIds: string[];
   deleteMessage: (messageId: string, chatId: string) => void;
 }
@@ -166,7 +166,7 @@ export function SocketProvider({ children }: SocketProviderProps) {
 
 
   // Function to mark messages as read
-  const markAsRead = (chat_id: string) => {
+  const markAsRead = (chat_id: string, reader_id: string) => {
     // Remove messages of that chat from unreadMessages state
     setUnreadMessages((prev) =>
       prev.filter((msg) => msg.chat_id !== chat_id)
@@ -175,7 +175,7 @@ export function SocketProvider({ children }: SocketProviderProps) {
     // Emit socket event to notify backend
     socket.emit('mark_messages_read', {
       chat_id,
-      reader_name: currentUserName,
+      reader_id,
     });
   };
 

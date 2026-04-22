@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useSocketContext } from "./SocketContext";
+import GroupChatModal from "./GroupChatModal";
 
 export default function Messages() {
   const { socket, unreadMessages, markAsRead, onlineUserIds, deleteMessage } = useSocketContext();
@@ -12,6 +13,7 @@ export default function Messages() {
   const [selectedContactName, setSelectedContactName] = useState("");
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ messageId: string; x: number; y: number } | null>(null);
+  const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
 
   // Отримуємо поточного користувача лише один раз для всього компонента
   const storedUser = JSON.parse(localStorage.getItem("currentUser"));
@@ -46,13 +48,44 @@ export default function Messages() {
       if (data.chat_id === currentRoom) {
         setMessages((prev) => [...prev, data]);
 
-        markAsRead(currentRoom); // Позначаємо повідомлення як прочитані, якщо вони для поточної кімнати
+        markAsRead(currentRoom, String(myId)); // Позначаємо повідомлення як прочитані, якщо вони для поточної кімнати
       }
     });
 
     socket.on("message_deleted", ({ messageId }) => {
       // Remove deleted message from local state
       setMessages((prev) => prev.filter((msg) => msg._id !== messageId));
+    });
+
+    socket.on("group_invite", (groupData) => {
+      // When invited to a new group, add it to contacts
+      console.log("🎉 Received group invite:", groupData);
+      
+      setContacts((prev) => {
+        // Check if group already exists
+        const exists = prev.some(
+          (c) => String(c._id || c.id) === String(groupData._id || groupData.id)
+        );
+        
+        if (exists) {
+          console.log("Group already exists, skipping duplicate");
+          return prev;
+        }
+        
+        // Add the new group
+        return [
+          {
+            id: groupData._id || groupData.id,
+            firstname: groupData.firstname || groupData.chatName,
+            lastname: groupData.lastname || "(Group)",
+            isGroup: groupData.isGroup !== false,
+            isGroupChat: groupData.isGroupChat !== false,
+            _id: groupData._id || groupData.id,
+            chatName: groupData.chatName || groupData.firstname,
+          },
+          ...prev,
+        ];
+      });
     });
 
     let typingTimer;
@@ -74,8 +107,9 @@ export default function Messages() {
       socket.off("receive_message");
       socket.off("message_deleted");
       socket.off("typing");
+      socket.off("group_invite");
     };
-  }, [username, currentRoom, socket]);
+  }, [username, currentRoom, socket, myId]);
 
   // Close context menu when clicking outside
   useEffect(() => {
@@ -111,6 +145,47 @@ export default function Messages() {
         }
       })
       .catch((err) => console.error("Помилка завантаження контактів:", err));
+  }, [myId]);
+
+  // Отримання групових чатів
+  useEffect(() => {
+    if (!myId) return;
+
+    const fetchGroupChats = async () => {
+      try {
+        const response = await fetch(`http://localhost:3001/api/chats/user/${myId}`);
+        if (response.ok) {
+          const groupChats = await response.json();
+          if (Array.isArray(groupChats) && groupChats.length > 0) {
+            // Додаємо групові чати до списку контактів
+            // Перетворюємо їх у формат, сумісний з контактами
+            const formattedGroups = groupChats.map((group) => ({
+              id: group._id,
+              _id: group._id,
+              firstname: group.chatName,
+              lastname: "(Group)",
+              isGroup: true,
+              isGroupChat: true,
+              chatName: group.chatName,
+              users: group.users,
+              groupAdmin: group.groupAdmin,
+            }));
+            setContacts((prev) => {
+              // Prevent duplicates when merging groups with contacts
+              const existingIds = prev.map((c) => String(c._id || c.id));
+              const newGroups = formattedGroups.filter(
+                (group) => !existingIds.includes(String(group._id))
+              );
+              return [...newGroups, ...prev];
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Помилка завантаження групових чатів:", error);
+      }
+    };
+
+    fetchGroupChats();
   }, [myId]);
 
   // Сортування контактів за новими повідомленнями
@@ -213,12 +288,19 @@ export default function Messages() {
       <div className="w-1/3 border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden flex flex-col">
         <div className="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
           <h3 className="font-bold text-gray-700">Контакти</h3>
+          <button
+            onClick={() => setIsGroupModalOpen(true)}
+            className="px-3 py-1 bg-[#A8A5D8] text-white text-sm rounded-lg hover:bg-opacity-90 transition-colors"
+          >
+            + Group
+          </button>
         </div>
         <div className="flex-1 p-2 flex flex-col gap-2">
           <div className="overflow-y-auto h-[calc(100vh-250px)] pr-2 custom-scrollbar">
             {contacts.map((contact) => {
-              // Перетворюємо в числа, потім сортуємо, потім склеюємо
-              const newRoomId = [Number(myId), Number(contact.id)]
+              // Для групових чатів використовуємо _id як room ID
+              // Для індивідуальних контактів конструюємо room ID з двох ID
+              const newRoomId = contact.isGroup ? String(contact.id) : [Number(myId), Number(contact.id)]
                 .sort((a, b) => a - b)
                 .join("_");
               const hasUnread = unreadMessages.some(
@@ -234,8 +316,8 @@ export default function Messages() {
                     setSelectedContactName(
                       `${contact.firstname} ${contact.lastname}`,
                     );
-                    setSelectedContactId(String(contact.id));
-                    markAsRead(newRoomId);
+                    setSelectedContactId(contact.isGroup ? null : String(contact.id));
+                    markAsRead(newRoomId, String(myId));
                   }}
                   className={`p-3 rounded-lg cursor-pointer mb-2 flex items-center justify-between transition-colors ${
                     isSelected ? "bg-[#A8A5D8] text-white" : "hover:bg-gray-100"
@@ -362,6 +444,46 @@ export default function Messages() {
           </button>
         </div>
       </div>
+
+      {/* Group Chat Modal */}
+      <GroupChatModal
+        isOpen={isGroupModalOpen}
+        onClose={() => setIsGroupModalOpen(false)}
+        contacts={contacts}
+        onGroupCreated={(newChat) => {
+          // Add the new group to the contacts list (with deduplication)
+          setContacts((prev) => {
+            // Check if group already exists to prevent duplicates
+            const exists = prev.some(
+              (c) => String(c._id || c.id) === String(newChat._id || newChat.id)
+            );
+            
+            if (exists) {
+              console.log("Group already exists, skipping duplicate");
+              return prev;
+            }
+            
+            // Add the formatted group
+            return [
+              {
+                id: newChat._id,
+                firstname: newChat.chatName,
+                lastname: "(Group)",
+                isGroup: true,
+                isGroupChat: true,
+                _id: newChat._id,
+                chatName: newChat.chatName,
+              },
+              ...prev,
+            ];
+          });
+          
+          // Open the new group chat
+          setCurrentRoom(newChat._id);
+          setSelectedContactName(newChat.chatName || "Group Chat");
+          setSelectedContactId(null);
+        }}
+      />
     </div>
   );
 }

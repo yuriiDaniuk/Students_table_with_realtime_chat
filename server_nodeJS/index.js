@@ -4,6 +4,14 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 const { Server } = require("socket.io");
 
+// Import models
+const Chat = require("./models/Chat");
+const Message = require("./models/Message");
+const User = require("./models/User");
+
+// Import routes
+const chatRoutes = require("./routes/chatRoutes");
+
 const app = express();
 const server = http.createServer(app);
 
@@ -23,25 +31,8 @@ mongoose
   .then(() => console.log("MongoDB connected successfully"))
   .catch((error) => console.error("MongoDB connection error:", error));
 
-const chatSchema = new mongoose.Schema({
-  name: String,
-  members: [String],
-});
-
-const messageSchema = new mongoose.Schema({
-  chat_id: String,
-  sender: String,
-  senderId: String,
-  content: String,
-  isRead: { type: Boolean, default: false },
-  createdAt: {
-    type: Date,
-    default: Date.now,
-  },
-});
-
-const Chat = mongoose.model("Chat", chatSchema);
-const Message = mongoose.model("Message", messageSchema);
+// Use routes
+app.use("/api/chats", chatRoutes);
 
 const io = new Server(server, {
   cors: {
@@ -77,7 +68,37 @@ io.on("connection", (socket) => {
     });
 
     socket.join(chatId);
-    console.log(`Користувач зайшов у кімнату: ${chatId}`);
+    console.log(`Користувач ${socket.userId} зайшов у кімнату: ${chatId}`);
+  });
+
+  socket.on("new_group_created", (chat) => {
+    // Broadcast group invite to all members except the creator
+    chat.users.forEach((userId) => {
+      if (String(userId) !== String(socket.userId)) {
+        io.to(`user_${userId}`).emit("group_invite", {
+          _id: chat._id,
+          id: chat._id,
+          firstname: chat.chatName,
+          lastname: "(Group)",
+          isGroup: true,
+          isGroupChat: true,
+          chatName: chat.chatName,
+          users: chat.users,
+          groupAdmin: chat.groupAdmin,
+          updatedAt: chat.updatedAt,
+        });
+      }
+    });
+    console.log(`✅ Group "${chat.chatName}" created and invites sent to members`);
+  });
+
+  socket.on("kicked_from_group", ({ userId, chatId }) => {
+    // Notify the kicked user in their personal notification room
+    io.to(`user_${userId}`).emit("removed_from_group", {
+      chat_id: chatId,
+      message: "You have been removed from this group.",
+    });
+    console.log(`✅ User ${userId} kicked from group ${chatId}`);
   });
 
   socket.on("typing", ({ chat_id, user }) => {
@@ -88,30 +109,34 @@ io.on("connection", (socket) => {
     try {
       const message = new Message({ chat_id, sender, senderId: socket.userId, content, isRead: false });
       const savedMessage = await message.save();
+      
+      // Broadcast message to all users in the chat room
       io.to(chat_id).emit("receive_message", savedMessage);
 
-      // Extract receiver ID from chat_id (format: "5_8")
-      const [id1, id2] = chat_id.split("_");
-      const receiverId = String(socket.userId) === String(id1) ? id2 : id1;
-
-      console.log(`Відправляємо сповіщення юзеру: user_${receiverId}`); // Лог для перевірки
-
-      // Emit global notification to receiver's personal room
-      io.to(`user_${receiverId}`).emit("global_notification", {
-        chat_id,
-        sender,
-        content: content.substring(0, 50),
-        createdAt: savedMessage.createdAt,
-      });
+      // Emit global notification to users NOT in the chat room (for unread count, etc.)
+      // This assumes the Chat model stores user IDs in a 'users' array
+      const chat = await Chat.findById(chat_id);
+      if (chat && chat.users) {
+        chat.users.forEach((userId) => {
+          if (String(userId) !== String(socket.userId)) {
+            io.to(`user_${userId}`).emit("global_notification", {
+              chat_id,
+              sender,
+              content: content.substring(0, 50),
+              createdAt: savedMessage.createdAt,
+            });
+          }
+        });
+      }
     } catch (error) {
       console.error("Error saving message:", error);
     }
   });
 
-  socket.on("mark_messages_read", async ({ chat_id, reader_name }) => {
+  socket.on("mark_messages_read", async ({ chat_id, reader_id }) => {
     try {
       await Message.updateMany(
-        { chat_id, sender: { $ne: reader_name }, isRead: false },
+        { chat_id, senderId: { $ne: reader_id }, isRead: false },
         { $set: { isRead: true } },
       );
       socket.to(chat_id).emit("messages_marked_read");
