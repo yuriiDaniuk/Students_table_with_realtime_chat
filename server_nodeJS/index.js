@@ -115,6 +115,22 @@ io.on("connection", (socket) => {
     socket.to(chat_id).emit("typing", { user, chat_id });
   });
 
+  socket.on("add_user_to_group", ({ chat, newUserId }) => {
+    // Відправляємо запрошення новому користувачу (використовуємо існуючу логіку group_invite)
+    io.to(`user_${newUserId}`).emit("group_invite", {
+      _id: chat._id,
+      id: chat._id,
+      firstname: chat.chatName,
+      lastname: "(Group)",
+      isGroup: true,
+      isGroupChat: true,
+      chatName: chat.chatName,
+      users: chat.users,
+      groupAdmin: chat.groupAdmin,
+    });
+    console.log(`✅ User ${newUserId} added to group ${chat._id}`);
+  });
+
   socket.on("chat_message", async ({ chat_id, sender, content }) => {
     try {
       const message = new Message({ chat_id, sender, senderId: socket.userId, content, isRead: false });

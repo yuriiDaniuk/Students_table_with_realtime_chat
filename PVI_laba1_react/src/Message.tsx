@@ -14,6 +14,8 @@ export default function Messages() {
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ messageId: string; x: number; y: number } | null>(null);
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+  const [showMembers, setShowMembers] = useState(false);
+  const [showAddUser, setShowAddUser] = useState(false);
 
   // Отримуємо поточного користувача лише один раз для всього компонента
   const storedUser = JSON.parse(localStorage.getItem("currentUser"));
@@ -115,6 +117,24 @@ export default function Messages() {
       }
     });
 
+    socket.on("removed_from_group", ({ chat_id, message }) => {
+      console.log("Мене видалили з групи:", message);
+      
+      // 1. Прибираємо групу зі списку контактів зліва (щоб вона зникла)
+      setContacts((prev) => prev.filter((c) => String(c._id || c.id) !== String(chat_id)));
+      
+      // 2. Якщо користувач прямо зараз читає цю групу - викидаємо його на порожній екран
+      setCurrentRoom((prevRoom) => {
+        if (String(prevRoom) === String(chat_id)) {
+          setSelectedContactName("");
+          setSelectedContactId(null);
+          alert("Адміністратор видалив вас із цієї групи.");
+          return "";
+        }
+        return prevRoom;
+      });
+    });
+
     return () => {
       clearTimeout(typingTimer);
       socket.off("connect");
@@ -124,6 +144,7 @@ export default function Messages() {
       socket.off("typing");
       socket.off("group_invite");
       socket.off("group_was_deleted");
+      socket.off("removed_from_group");
     };
   }, [username, currentRoom, socket, myId]);
 
@@ -328,6 +349,79 @@ export default function Messages() {
     }
   };
 
+  const handleRemoveUserFromGroup = async (userToRemoveId) => {
+    const confirmRemove = window.confirm("Ви дійсно хочете видалити цього користувача з групи?");
+    if (!confirmRemove) return;
+
+    try {
+      const response = await fetch(`http://localhost:3001/api/chats/remove-from-group`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          chatId: currentRoom, 
+          userId: myId, // Це ви (адмін)
+          removedUserId: userToRemoveId // Кого видаляємо
+        }),
+      });
+
+      if (response.ok) {
+        // Оновлюємо локальний стан (видаляємо юзера з масиву users цієї групи)
+        setContacts(prev => prev.map(chat => {
+          if (String(chat._id || chat.id) === currentRoom) {
+            return { ...chat, users: chat.users.filter(id => String(id) !== String(userToRemoveId)) };
+          }
+          return chat;
+        }));
+
+        // Сповіщаємо бекенд, щоб він викинув користувача через сокети
+        socket.emit("kicked_from_group", { userId: userToRemoveId, chatId: currentRoom });
+      } else {
+        const errorData = await response.json();
+        alert(`Помилка: ${errorData.message}`);
+      }
+    } catch (error) {
+      console.error("Помилка видалення користувача:", error);
+    }
+  };
+
+  const handleAddUserToGroup = async (newUserId) => {
+    try {
+      const response = await fetch(`http://localhost:3001/api/chats/add-to-group`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          chatId: currentRoom, 
+          userId: myId, // Це ви (адмін)
+          newUserId: newUserId // Кого додаємо
+        }),
+      });
+
+      if (response.ok) {
+        const updatedChat = await response.json();
+        
+        // Оновлюємо локальний стан (додаємо юзера до масиву users цієї групи)
+        setContacts(prev => prev.map(chat => {
+          if (String(chat._id || chat.id) === currentRoom) {
+            return { ...chat, users: [...chat.users, newUserId] };
+          }
+          return chat;
+        }));
+
+        // Сповіщаємо бекенд, щоб він надіслав сокет новому учаснику
+        socket.emit("add_user_to_group", { chat: updatedChat, newUserId });
+        
+        // Закриваємо міні-меню додавання
+        setShowAddUser(false);
+        alert("Користувача успішно додано!");
+      } else {
+        const errorData = await response.json();
+        alert(`Помилка: ${errorData.message}`);
+      }
+    } catch (error) {
+      console.error("Помилка додавання користувача:", error);
+    }
+  };
+
   return (
     <div className="max-w-5xl mx-auto p-6 font-sans flex gap-6">
       {/* ЛІВА КОЛОНКА */}
@@ -421,17 +515,99 @@ export default function Messages() {
             })()}
           </div>
 
-          <div className="flex items-center">
+          <div className="flex items-center gap-3 relative">
             {(() => {
               const currentChatObj = contacts.find(c => String(c._id || c.id) === currentRoom);
-              if (currentChatObj?.isGroupChat && String(currentChatObj.groupAdmin) === String(myId)) {
+              
+              if (currentChatObj?.isGroupChat) {
+                const isAdmin = String(currentChatObj.groupAdmin) === String(myId);
+                
                 return (
-                  <button
-                    onClick={handleDeleteGroup}
-                    className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 shadow-sm transition-colors whitespace-nowrap"
-                  >
-                    Видалити групу
-                  </button>
+                  <>
+                    {/* Кнопка відкриття списку учасників */}
+                    <button
+                      onClick={() => setShowMembers(!showMembers)}
+                      className="px-3 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-300 transition-colors"
+                    >
+                      👥 Учасники ({currentChatObj.users?.length || 0})
+                    </button>
+
+                    {/* Випадаючий список учасників */}
+                    {showMembers && (
+                      <div className="absolute top-12 right-0 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-2 max-h-[400px] overflow-y-auto">
+                        <h4 className="text-xs font-bold text-gray-400 mb-2 px-2 uppercase">Учасники групи</h4>
+                        
+                        {/* Список поточних учасників */}
+                        {currentChatObj.users?.map(userId => {
+                          const userContact = contacts.find(c => String(c.id) === String(userId));
+                          const userName = userContact ? `${userContact.firstname} ${userContact.lastname}` : (String(userId) === String(myId) ? "Ви" : "Користувач");
+                          
+                          return (
+                            <div key={userId} className="flex justify-between items-center p-2 hover:bg-gray-50 rounded-lg">
+                              <span className="text-sm text-gray-700 truncate max-w-[130px]">{userName}</span>
+                              {isAdmin && String(userId) !== String(myId) && (
+                                <button 
+                                  onClick={() => handleRemoveUserFromGroup(userId)}
+                                  className="text-xs px-2 py-1 bg-red-100 text-red-600 rounded hover:bg-red-200"
+                                >
+                                  Видалити
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        {/* БЛОК ДОДАВАННЯ КОРИСТУВАЧА (тільки для адміна) */}
+                        {isAdmin && (
+                          <div className="border-t border-gray-200 mt-2 pt-2">
+                            <button
+                              onClick={() => setShowAddUser(!showAddUser)}
+                              className="w-full text-left px-2 py-1.5 text-sm font-semibold text-[#A8A5D8] hover:bg-blue-50 rounded-lg transition-colors"
+                            >
+                              {showAddUser ? "❌ Скасувати додавання" : "➕ Додати учасника"}
+                            </button>
+
+                            {/* Міні-список тих, кого ще немає в групі */}
+                            {showAddUser && (
+                              <div className="mt-2 flex flex-col gap-1 max-h-32 overflow-y-auto custom-scrollbar border border-gray-100 rounded p-1 bg-gray-50">
+                                {contacts
+                                  .filter(c => !c.isGroup && !c.isGroupChat) // Тільки реальні люди
+                                  .filter(c => !currentChatObj.users?.includes(String(c.id))) // Тільки ті, кого ще немає в цій групі
+                                  .map(user => (
+                                    <div key={user.id} className="flex justify-between items-center p-1 hover:bg-white rounded border border-transparent hover:border-gray-200">
+                                      <span className="text-xs truncate max-w-[120px]">{user.firstname} {user.lastname}</span>
+                                      <button
+                                        onClick={() => handleAddUserToGroup(user.id)}
+                                        className="text-[10px] bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600 transition-colors"
+                                      >
+                                        Додати
+                                      </button>
+                                    </div>
+                                  ))}
+                                
+                                {/* Якщо всі контакти вже в групі */}
+                                {contacts.filter(c => !c.isGroup && !c.isGroupChat && !currentChatObj.users?.includes(String(c.id))).length === 0 && (
+                                  <div className="text-xs text-gray-400 p-2 text-center italic">
+                                    Немає кого додавати
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Кнопка видалення самої групи (тільки для адміна) */}
+                    {isAdmin && (
+                      <button
+                        onClick={handleDeleteGroup}
+                        className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 shadow-sm transition-colors whitespace-nowrap"
+                      >
+                        Видалити групу
+                      </button>
+                    )}
+                  </>
                 );
               }
               return null;
@@ -537,7 +713,7 @@ export default function Messages() {
       <GroupChatModal
         isOpen={isGroupModalOpen}
         onClose={() => setIsGroupModalOpen(false)}
-        contacts={contacts}
+        contacts={contacts.filter(contact => !contact.isGroupChat && !contact.isGroup)}
         onGroupCreated={(newChat) => {
           setContacts((prev) => {
             const exists = prev.some(
