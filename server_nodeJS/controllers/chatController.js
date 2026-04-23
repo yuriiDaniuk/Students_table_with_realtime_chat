@@ -1,5 +1,6 @@
 const Chat = require("../models/Chat");
 const User = require("../models/User");
+const Message = require("../models/Message");
 
 // GET USER CHATS
 exports.getUserChats = async (req, res) => {
@@ -247,5 +248,37 @@ exports.addToGroup = async (req, res) => {
       message: "Error adding user to group",
       error: error.message,
     });
+  }
+};
+
+// DELETE GROUP AND ITS MESSAGES
+exports.deleteGroup = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { userId } = req.body;
+
+    if (!chatId || !userId) {
+      return res.status(400).json({ message: "Please provide chatId and userId" });
+    }
+
+    const chat = await Chat.findById(chatId);
+    if (!chat) return res.status(404).json({ message: "Chat not found" });
+
+    // Перевіряємо чи це адмін
+    if (String(chat.groupAdmin) !== String(userId)) {
+      return res.status(403).json({ message: "Only the group admin can delete the group" });
+    }
+
+    // ВИДАЛЯЄМО ВСІ ПОВІДОМЛЕННЯ з цієї групи, щоб не було "сміття"
+    await Message.deleteMany({ chat_id: chatId });
+
+    // Видаляємо саму групу
+    await Chat.findByIdAndDelete(chatId);
+
+    // Повертаємо список юзерів, щоб фронтенд знав, кому відправити сокет
+    res.json({ message: "Group deleted successfully", users: chat.users });
+  } catch (error) {
+    console.error("Error deleting group:", error);
+    res.status(500).json({ message: "Error deleting group", error: error.message });
   }
 };

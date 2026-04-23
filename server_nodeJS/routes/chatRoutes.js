@@ -6,6 +6,7 @@ const {
   removeFromGroup,
   addToGroup,
   getUserChats,
+  deleteGroup,
 } = require("../controllers/chatController");
 
 // Create a new group chat
@@ -22,5 +23,8 @@ router.put("/remove-from-group", removeFromGroup);
 
 // Add a user to a group chat
 router.put("/add-to-group", addToGroup);
+
+router.delete("/group/:chatId", deleteGroup);
+
 
 module.exports = router;

@@ -88,6 +88,21 @@ export default function Messages() {
       });
     });
 
+    socket.on("group_was_deleted", ({ chatId }) => {
+      // 1. Прибираємо групу зі списку контактів зліва
+      setContacts((prev) => prev.filter((c) => String(c._id || c.id) !== String(chatId)));
+      
+      // 2. Якщо ми прямо зараз сиділи в цій групі - викидаємо нас з неї
+      setCurrentRoom((prevRoom) => {
+        if (String(prevRoom) === String(chatId)) {
+          setSelectedContactName("");
+          setSelectedContactId(null);
+          return "";
+        }
+        return prevRoom;
+      });
+    });
+
     let typingTimer;
     socket.on("typing", (data) => {
       // Показуємо індикатор тільки якщо ми в тій самій кімнаті і це не ми друкуємо
@@ -108,6 +123,7 @@ export default function Messages() {
       socket.off("message_deleted");
       socket.off("typing");
       socket.off("group_invite");
+      socket.off("group_was_deleted");
     };
   }, [username, currentRoom, socket, myId]);
 
@@ -282,6 +298,36 @@ export default function Messages() {
     });
   };
 
+  const handleDeleteGroup = async () => {
+    const currentChatObj = contacts.find(c => String(c._id || c.id) === currentRoom);
+    if (!currentChatObj) return;
+
+    const confirmDelete = window.confirm("Ви впевнені, що хочете назавжди видалити цю групу? Всі повідомлення зникнуть.");
+    if (!confirmDelete) return;
+
+    try {
+      const response = await fetch(`http://localhost:3001/api/chats/group/${currentRoom}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: myId }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Сервер видалив базу, тепер ми кажемо сокету оновити екрани всім учасникам
+        socket.emit("group_deleted", { 
+          chatId: currentRoom, 
+          users: currentChatObj.users || data.users 
+        });
+      } else {
+        const errorData = await response.json();
+        alert(`Помилка: ${errorData.message}`);
+      }
+    } catch (error) {
+      console.error("Помилка видалення групи:", error);
+    }
+  };
+
   return (
     <div className="max-w-5xl mx-auto p-6 font-sans flex gap-6">
       {/* ЛІВА КОЛОНКА */}
@@ -298,8 +344,6 @@ export default function Messages() {
         <div className="flex-1 p-2 flex flex-col gap-2">
           <div className="overflow-y-auto h-[calc(100vh-250px)] pr-2 custom-scrollbar">
             {contacts.map((contact) => {
-              // Для групових чатів використовуємо _id як room ID
-              // Для індивідуальних контактів конструюємо room ID з двох ID
               const newRoomId = contact.isGroup ? String(contact.id) : [Number(myId), Number(contact.id)]
                 .sort((a, b) => a - b)
                 .join("_");
@@ -338,20 +382,64 @@ export default function Messages() {
 
       {/* ПРАВА КОЛОНКА */}
       <div className="w-2/3 flex flex-col">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-bold text-gray-800">
-            {selectedContactName
-              ? `Чат з: ${selectedContactName}`
-              : "Оберіть контакт для чату"}
-          </h2>
-          <div className="flex items-center gap-2">
-            <span
-              className={`w-3 h-3 rounded-full ${selectedContactId && onlineUserIds.includes(selectedContactId) ? "bg-green-500" : "bg-gray-400"}`}
-              title={selectedContactId && onlineUserIds.includes(selectedContactId) ? "Користувач онлайн" : "Користувач офлайн"}
-            ></span>
+        {/* Оновлений заголовок чату */}
+        <div className="flex justify-between items-center mb-4 w-full h-10">
+          
+          {/* Ліва частина: Назва + Крапочка (вирівняні по центру) */}
+          <div className="flex items-center gap-3">
+            <h2 className="text-2xl font-bold text-gray-800 leading-none">
+              {selectedContactName
+                ? `Чат з: ${selectedContactName}`
+                : "Оберіть контакт для чату"}
+            </h2>
+            
+            {/* РОЗУМНА КРАПОЧКА ОНЛАЙН/ОФЛАЙН */}
+            {(() => {
+              const currentChatObj = contacts.find(c => String(c._id || c.id) === currentRoom);
+              let isOnline = false;
+
+              if (currentChatObj) {
+                if (currentChatObj.isGroupChat) {
+                  // ПРАВИЛО ДЛЯ ГРУПИ: Шукаємо, чи є хоч хтось з учасників (крім мене) в масиві onlineUserIds
+                  isOnline = currentChatObj.users?.some(
+                    userId => String(userId) !== String(myId) && onlineUserIds.includes(String(userId))
+                  );
+                } else {
+                  // ПРАВИЛО ДЛЯ 1-НА-1: Просто перевіряємо ID співрозмовника
+                  isOnline = selectedContactId && onlineUserIds.includes(selectedContactId);
+                }
+              }
+
+              return (
+                <span
+                  className={`w-3 h-3 rounded-full shrink-0 ${
+                    isOnline ? "bg-green-500" : "bg-gray-400"
+                  }`}
+                  title={isOnline ? "Є учасники онлайн" : "Всі офлайн"}
+                ></span>
+              );
+            })()}
+          </div>
+
+          <div className="flex items-center">
+            {(() => {
+              const currentChatObj = contacts.find(c => String(c._id || c.id) === currentRoom);
+              if (currentChatObj?.isGroupChat && String(currentChatObj.groupAdmin) === String(myId)) {
+                return (
+                  <button
+                    onClick={handleDeleteGroup}
+                    className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 shadow-sm transition-colors whitespace-nowrap"
+                  >
+                    Видалити групу
+                  </button>
+                );
+              }
+              return null;
+            })()}
           </div>
         </div>
 
+        {/* СПИСОК ПОВІДОМЛЕНЬ */}
         <div className="border border-gray-200 h-[450px] overflow-y-auto p-5 flex flex-col gap-4 bg-gray-50 rounded-xl shadow-inner custom-scrollbar">
           {!currentRoom ? (
             <div className="m-auto text-gray-400 text-sm">
@@ -387,11 +475,10 @@ export default function Messages() {
               );
             })
           )}
-          {/* ЯКІР АВТОСКРОЛУ: ТЕПЕР ВІН ОДИН І ЗОВНІ ЦИКЛУ */}
           <div ref={messagesEndRef} />
         </div>
 
-        {/* CONTEXT MENU - Telegram Style */}
+        {/* CONTEXT MENU */}
         {contextMenu && (
           <div
             ref={contextMenuRef}
@@ -413,11 +500,12 @@ export default function Messages() {
           </div>
         )}
 
-        {/* ПРАВИЛЬНИЙ ІНДИКАТОР ДРУКУ */}
+        {/* ІНДИКАТОР ДРУКУ */}
         <div className="h-5 text-sm text-gray-400 italic px-2 mt-1 mb-1">
           {typingUser ? `${typingUser} друкує...` : ""}
         </div>
 
+        {/* ПОЛЕ ВВОДУ */}
         <div className="flex gap-3">
           <input
             type="text"
@@ -451,19 +539,15 @@ export default function Messages() {
         onClose={() => setIsGroupModalOpen(false)}
         contacts={contacts}
         onGroupCreated={(newChat) => {
-          // Add the new group to the contacts list (with deduplication)
           setContacts((prev) => {
-            // Check if group already exists to prevent duplicates
             const exists = prev.some(
               (c) => String(c._id || c.id) === String(newChat._id || newChat.id)
             );
             
             if (exists) {
-              console.log("Group already exists, skipping duplicate");
               return prev;
             }
             
-            // Add the formatted group
             return [
               {
                 id: newChat._id,
@@ -473,12 +557,13 @@ export default function Messages() {
                 isGroupChat: true,
                 _id: newChat._id,
                 chatName: newChat.chatName,
+                groupAdmin: newChat.groupAdmin || myId,
+                users: newChat.users,
               },
               ...prev,
             ];
           });
           
-          // Open the new group chat
           setCurrentRoom(newChat._id);
           setSelectedContactName(newChat.chatName || "Group Chat");
           setSelectedContactId(null);

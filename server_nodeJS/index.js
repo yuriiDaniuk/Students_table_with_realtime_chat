@@ -92,6 +92,16 @@ io.on("connection", (socket) => {
     console.log(`✅ Group "${chat.chatName}" created and invites sent to members`);
   });
 
+  socket.on("group_deleted", ({ chatId, users }) => {
+    // Сповіщаємо всіх учасників групи, щоб їхній React видалив чат з меню
+    if (users && Array.isArray(users)) {
+      users.forEach((userId) => {
+        io.to(`user_${userId}`).emit("group_was_deleted", { chatId });
+      });
+    }
+    console.log(`🗑️ Group ${chatId} completely deleted and members notified`);
+  });
+
   socket.on("kicked_from_group", ({ userId, chatId }) => {
     // Notify the kicked user in their personal notification room
     io.to(`user_${userId}`).emit("removed_from_group", {
